@@ -7,7 +7,7 @@ import re
 import shutil
 from pathlib import Path
 
-SCRIPT_VERSION = "1.0.1"
+SCRIPT_VERSION = "1.0.2"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 SCRIPT_URL = f"{GITHUB_RAW}/init_dashboard.py"
@@ -102,14 +102,23 @@ def check_root():
         print_error("This script must be run as root (use sudo)")
         sys.exit(1)
 
-def run_command(command, shell=True, check=True, timeout=300):
+def run_command(command, shell=True, check=True, timeout=300, show_output=False):
     try:
-        result = subprocess.run(command, shell=shell, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
-        return result.returncode == 0
+        if show_output:
+            result = subprocess.run(command, shell=shell, check=check, timeout=timeout)
+            return result.returncode == 0
+        else:
+            result = subprocess.run(command, shell=shell, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+            return result.returncode == 0
     except subprocess.TimeoutExpired:
-        print_error(f"Command timed out: {command}")
+        print_error(f"Command timed out after {timeout}s")
         return False
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        if show_output:
+            return False
+        print_error(f"Command failed with exit code {e.returncode}")
+        if e.stderr:
+            print_error(f"Error output: {e.stderr[:200]}")
         return False
 
 def create_user():
@@ -124,28 +133,58 @@ def create_user():
 def update_system():
     print_header("Updating System Packages")
     print_info("Updating package lists...")
-    if run_command('apt-get update -qq', timeout=120):
+    if run_command('apt-get update', timeout=120, show_output=True):
         print_success("Package lists updated")
     else:
         print_warning("Package list update had issues, continuing...")
     
     print_info("Upgrading packages (this may take several minutes)...")
     upgrade_cmd = 'DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"'
-    if run_command(upgrade_cmd, timeout=600):
+    if run_command(upgrade_cmd, timeout=600, show_output=True):
         print_success("System packages upgraded")
     else:
         print_warning("Package upgrade had issues, continuing with installation...")
 
 def install_dependencies():
     print_header("Installing Dependencies")
-    packages = ['python3', 'python3-pip', 'python3-venv', 'nginx', 'git', 'curl', 'chromium-browser', 'unclutter', 'x11-xserver-utils', 'xdotool']
-    print_info(f"Installing {len(packages)} packages...")
-    cmd = f"DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' {' '.join(packages)}"
-    if run_command(cmd, timeout=600):
-        print_success("All dependencies installed")
-    else:
-        print_error("Failed to install dependencies")
+    
+    required_packages = [
+        'python3',
+        'python3-pip',
+        'python3-venv',
+        'nginx',
+        'git',
+        'curl'
+    ]
+    
+    optional_packages = [
+        ('chromium-browser', 'chromium'),
+        ('unclutter', None),
+        ('x11-xserver-utils', None),
+        ('xdotool', None)
+    ]
+    
+    print_info(f"Installing {len(required_packages)} required packages...")
+    cmd = f"DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' {' '.join(required_packages)}"
+    if not run_command(cmd, timeout=600, show_output=True):
+        print_error("Failed to install required dependencies")
         sys.exit(1)
+    print_success("Required packages installed")
+    
+    print_info("Installing optional packages for kiosk mode...")
+    for primary, alternative in optional_packages:
+        if run_command(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {primary}", timeout=300):
+            print_success(f"Installed {primary}")
+        elif alternative:
+            print_warning(f"{primary} not available, trying {alternative}...")
+            if run_command(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {alternative}", timeout=300):
+                print_success(f"Installed {alternative}")
+            else:
+                print_warning(f"Could not install {primary} or {alternative}")
+        else:
+            print_warning(f"Could not install {primary} (optional)")
+    
+    print_success("All dependencies processed")
 
 def create_directory_structure():
     print_info("Creating directory structure...")
@@ -161,7 +200,7 @@ def setup_python_environment():
         print_error("Failed to create virtual environment")
         sys.exit(1)
     print_success("Virtual environment created")
-    print_info("Installing Python packages...")
+    print_info("Installing Python packages (this may take a few minutes)...")
     run_command(f'sudo -u {USER} {venv_path}/bin/pip install --quiet --upgrade pip', timeout=120)
     if run_command(f'sudo -u {USER} {venv_path}/bin/pip install --quiet flask flask-cors requests gunicorn', timeout=300):
         print_success("Python packages installed")
@@ -423,11 +462,19 @@ WantedBy=multi-user.target
 def create_kiosk_mode():
     print_info("Setting up kiosk mode...")
     content = """#!/bin/bash
-xset s off
-xset -dpms
-xset s noblank
-unclutter -idle 0.1 &
-chromium-browser --kiosk --noerrdialogs --disable-infobars --no-first-run --fast --fast-start --disable-features=TranslateUI --disk-cache-dir=/dev/null --password-store=basic http://localhost
+xset s off 2>/dev/null
+xset -dpms 2>/dev/null
+xset s noblank 2>/dev/null
+unclutter -idle 0.1 2>/dev/null &
+if command -v chromium-browser &> /dev/null; then
+    BROWSER="chromium-browser"
+elif command -v chromium &> /dev/null; then
+    BROWSER="chromium"
+else
+    echo "No chromium browser found"
+    exit 1
+fi
+$BROWSER --kiosk --noerrdialogs --disable-infobars --no-first-run --fast --fast-start --disable-features=TranslateUI --disk-cache-dir=/dev/null --password-store=basic http://localhost
 """
     with open(f"{INSTALL_DIR}/start_kiosk.sh", 'w') as f:
         f.write(content)
@@ -534,6 +581,8 @@ def main():
     except Exception as e:
         print()
         print_error(f"Installation failed: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == '__main__':
