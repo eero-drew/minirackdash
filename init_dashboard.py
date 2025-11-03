@@ -511,7 +511,7 @@ def authenticate_eero():
         response.raise_for_status()
         print("\\n✓ Verification code sent!")
         code = input("Enter the verification code: ")
-        verify_url = "https://api-user.e2ro.com/2.2/login/verify"
+        verify_url = "https://api-user.e2ro.com/2.3/login/verify"
         verify_payload = {"code": code}
         verify_response = requests.post(verify_url, json=verify_payload)
         verify_response.raise_for_status()
