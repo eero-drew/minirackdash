@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-SCRIPT_VERSION = "2.0.1"
+SCRIPT_VERSION = "2.0.2"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 SCRIPT_URL_V1 = f"{GITHUB_RAW}/init_dashboard.py"
@@ -411,11 +411,26 @@ class EeroAPI:
             logging.error(f"Error fetching bandwidth: {{e}}")
             return None
 
+def categorize_device_type(device):
+    manufacturer = device.get('manufacturer', '').lower()
+    hostname = device.get('hostname', '').lower()
+    nickname = device.get('nickname', '').lower()
+    
+    combined = f"{{manufacturer}} {{hostname}} {{nickname}}"
+    
+    if 'iphone' in combined or 'ipad' in combined or 'apple' in combined or 'ios' in combined:
+        return 'iPhone'
+    elif 'android' in combined or 'samsung' in combined or 'google' in combined or 'pixel' in combined:
+        return 'Android'
+    else:
+        return 'Other'
+
 eero_api = EeroAPI()
 data_cache = {{
     'connected_users': [],
-    'wifi_versions': {{}},
+    'device_types': {{}},
     'bandwidth': [],
+    'signal_strength': [],
     'devices': [],
     'last_update': None,
     'speedtest_running': False,
@@ -434,12 +449,27 @@ def update_cache():
             two_hours_ago = current_time - timedelta(hours=2)
             data_cache['connected_users'] = [entry for entry in data_cache['connected_users'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
             
-            wifi_versions = {{}}
+            device_types = {{'iPhone': 0, 'Android': 0, 'Other': 0}}
+            signal_strengths = []
+            
             for device in connected:
-                wifi_std = device.get('connection', {{}}).get('wifi_standard', 'Unknown')
-                wifi_label = f"WiFi {{wifi_std[-1]}}" if wifi_std != 'Unknown' else 'Unknown'
-                wifi_versions[wifi_label] = wifi_versions.get(wifi_label, 0) + 1
-            data_cache['wifi_versions'] = wifi_versions
+                device_type = categorize_device_type(device)
+                device_types[device_type] += 1
+                
+                connection = device.get('connection', {{}})
+                signal_avg = connection.get('signal_avg')
+                if signal_avg is not None:
+                    signal_strengths.append(signal_avg)
+            
+            data_cache['device_types'] = device_types
+            
+            if signal_strengths:
+                avg_signal = sum(signal_strengths) / len(signal_strengths)
+                data_cache['signal_strength'].append({{
+                    'timestamp': current_time.isoformat(),
+                    'average': round(avg_signal, 2)
+                }})
+                data_cache['signal_strength'] = [entry for entry in data_cache['signal_strength'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
             
             device_list = []
             for device in connected:
@@ -450,8 +480,10 @@ def update_cache():
                     'mac': device.get('mac', 'N/A'),
                     'manufacturer': device.get('manufacturer', 'Unknown'),
                     'signal_strength': connection.get('signal_strength', 0),
+                    'signal_avg': connection.get('signal_avg', 0),
                     'wifi_standard': connection.get('wifi_standard', 'Unknown'),
-                    'connected_at': device.get('connected', {{}}).get('last_changed', 'Unknown')
+                    'connected_at': device.get('connected', {{}}).get('last_changed', 'Unknown'),
+                    'device_type': categorize_device_type(device)
                 }}
                 device_list.append(device_info)
             data_cache['devices'] = sorted(device_list, key=lambda x: x['name'].lower())
@@ -462,8 +494,7 @@ def update_cache():
             usage = bandwidth_data.get('data', {{}})
             data_cache['bandwidth'].append({{
                 'timestamp': current_time.isoformat(),
-                'download': usage.get('download', 0) / 1024 / 1024,
-                'upload': usage.get('upload', 0) / 1024 / 1024
+                'download': usage.get('download', 0) / 1024 / 1024
             }})
             two_hours_ago = current_time - timedelta(hours=2)
             data_cache['bandwidth'] = [entry for entry in data_cache['bandwidth'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
@@ -879,9 +910,9 @@ def create_frontend():
             </div>
         </div>
         <div class="chart-card">
-            <div class="chart-title">WiFi Distribution</div>
+            <div class="chart-title">Device Types</div>
             <div class="chart-container">
-                <canvas id="wifiChart"></canvas>
+                <canvas id="deviceTypeChart"></canvas>
             </div>
         </div>
         <div class="chart-card">
@@ -891,9 +922,9 @@ def create_frontend():
             </div>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Upload Bandwidth</div>
+            <div class="chart-title">Average Signal Strength</div>
             <div class="chart-container">
-                <canvas id="uploadChart"></canvas>
+                <canvas id="signalChart"></canvas>
             </div>
         </div>
     </div>
@@ -909,14 +940,15 @@ def create_frontend():
                 <thead>
                     <tr>
                         <th>Device Name</th>
+                        <th>Type</th>
                         <th>IP Address</th>
                         <th>Manufacturer</th>
                         <th>WiFi</th>
-                        <th>Signal</th>
+                        <th>Signal Avg</th>
                     </tr>
                 </thead>
                 <tbody id="deviceTableBody">
-                    <tr><td colspan="5" style="text-align: center;">Loading devices...</td></tr>
+                    <tr><td colspan="6" style="text-align: center;">Loading devices...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -939,13 +971,14 @@ def create_frontend():
     </div>
 
     <script>
-        let charts = { users: null, wifi: null, download: null, upload: null };
+        let charts = { users: null, deviceType: null, download: null, signal: null };
         const chartColors = {
             primary: '#4da6ff',
             secondary: '#ff6b6b',
             success: '#51cf66',
             warning: '#ffd43b',
-            info: '#74c0fc'
+            info: '#74c0fc',
+            purple: '#b197fc'
         };
         
         const commonOptions = {
@@ -990,19 +1023,17 @@ def create_frontend():
                 options: commonOptions
             });
 
-            const wifiCtx = document.getElementById('wifiChart').getContext('2d');
-            charts.wifi = new Chart(wifiCtx, {
+            const deviceTypeCtx = document.getElementById('deviceTypeChart').getContext('2d');
+            charts.deviceType = new Chart(deviceTypeCtx, {
                 type: 'doughnut',
                 data: {
-                    labels: [],
+                    labels: ['iPhone', 'Android', 'Other'],
                     datasets: [{
-                        data: [],
+                        data: [0, 0, 0],
                         backgroundColor: [
                             chartColors.primary,
                             chartColors.success,
-                            chartColors.warning,
-                            chartColors.secondary,
-                            chartColors.info
+                            chartColors.warning
                         ],
                         borderWidth: 2,
                         borderColor: '#001a33'
@@ -1042,16 +1073,16 @@ def create_frontend():
                 options: commonOptions
             });
 
-            const uploadCtx = document.getElementById('uploadChart').getContext('2d');
-            charts.upload = new Chart(uploadCtx, {
+            const signalCtx = document.getElementById('signalChart').getContext('2d');
+            charts.signal = new Chart(signalCtx, {
                 type: 'line',
                 data: {
                     labels: [],
                     datasets: [{
-                        label: 'Upload (Mbps)',
+                        label: 'Average Signal',
                         data: [],
-                        borderColor: chartColors.secondary,
-                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                        borderColor: chartColors.purple,
+                        backgroundColor: 'rgba(177, 151, 252, 0.1)',
                         tension: 0.4,
                         fill: true,
                         borderWidth: 2
@@ -1075,26 +1106,33 @@ def create_frontend():
                 charts.users.data.datasets[0].data = userCounts;
                 charts.users.update();
 
-                const wifiLabels = Object.keys(data.wifi_versions);
-                const wifiData = Object.values(data.wifi_versions);
-                charts.wifi.data.labels = wifiLabels;
-                charts.wifi.data.datasets[0].data = wifiData;
-                charts.wifi.update();
+                const deviceTypes = data.device_types || { iPhone: 0, Android: 0, Other: 0 };
+                charts.deviceType.data.datasets[0].data = [
+                    deviceTypes.iPhone || 0,
+                    deviceTypes.Android || 0,
+                    deviceTypes.Other || 0
+                ];
+                charts.deviceType.update();
 
                 const bandwidthLabels = data.bandwidth.map(entry => {
                     const date = new Date(entry.timestamp);
                     return date.toLocaleTimeString();
                 });
                 const downloadData = data.bandwidth.map(entry => entry.download);
-                const uploadData = data.bandwidth.map(entry => entry.upload);
                 
                 charts.download.data.labels = bandwidthLabels;
                 charts.download.data.datasets[0].data = downloadData;
                 charts.download.update();
 
-                charts.upload.data.labels = bandwidthLabels;
-                charts.upload.data.datasets[0].data = uploadData;
-                charts.upload.update();
+                const signalLabels = data.signal_strength.map(entry => {
+                    const date = new Date(entry.timestamp);
+                    return date.toLocaleTimeString();
+                });
+                const signalData = data.signal_strength.map(entry => entry.average);
+                
+                charts.signal.data.labels = signalLabels;
+                charts.signal.data.datasets[0].data = signalData;
+                charts.signal.update();
 
                 const lastUpdate = new Date(data.last_update);
                 document.getElementById('lastUpdate').textContent = `Updated: ${lastUpdate.toLocaleTimeString()}`;
@@ -1120,20 +1158,21 @@ def create_frontend():
                 
                 const tbody = document.getElementById('deviceTableBody');
                 if (data.devices.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No devices connected</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No devices connected</td></tr>';
                     return;
                 }
                 
                 tbody.innerHTML = data.devices.map(device => `
                     <tr>
                         <td><strong>${device.name}</strong></td>
+                        <td>${device.device_type}</td>
                         <td>${device.ip}</td>
                         <td>${device.manufacturer}</td>
                         <td>${device.wifi_standard}</td>
                         <td>
                             <div class="signal-bar">
-                                <div class="signal-fill ${getSignalClass(device.signal_strength)}" 
-                                     style="width: ${device.signal_strength}%"></div>
+                                <div class="signal-fill ${getSignalClass(device.signal_avg)}" 
+                                     style="width: ${device.signal_avg}%"></div>
                             </div>
                         </td>
                     </tr>
@@ -1445,14 +1484,12 @@ def print_completion_message():
     print_header("Installation Complete!")
     print_success(f"Eero Dashboard v{SCRIPT_VERSION} installed successfully!")
     print()
-    print_color(Colors.CYAN, "🎉 What's New in v2.0.1:")
-    print_color(Colors.GREEN, "  ✓ Optimized for 1280x400 resolution (single row layout)")
-    print_color(Colors.GREEN, "  ✓ Compact header design with logo and action buttons")
-    print_color(Colors.GREEN, "  ✓ Device details panel (names, IPs, signal strength)")
-    print_color(Colors.GREEN, "  ✓ Integrated speed test functionality")
-    print_color(Colors.GREEN, "  ✓ No-scroll design - everything fits on screen")
-    print_color(Colors.GREEN, "  ✓ Smart version upgrade system (v1 → v2)")
-    print_color(Colors.GREEN, "  ✓ Official eero API authentication flow")
+    print_color(Colors.CYAN, "🎉 What's New in v2.0.2:")
+    print_color(Colors.GREEN, "  ✓ Device Type chart (iPhone/Android/Other)")
+    print_color(Colors.GREEN, "  ✓ Average Signal Strength tracking over time")
+    print_color(Colors.GREEN, "  ✓ Removed Upload Bandwidth (replaced with signal)")
+    print_color(Colors.GREEN, "  ✓ Enhanced device categorization")
+    print_color(Colors.GREEN, "  ✓ Signal averaging across all connected devices")
     print()
     print_info("Next steps:")
     print(f"  1. Place logo: sudo cp eero-logo.png {INSTALL_DIR}/frontend/assets/")
