@@ -7,7 +7,7 @@ import re
 import shutil
 from pathlib import Path
 
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "1.0.1"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 SCRIPT_URL = f"{GITHUB_RAW}/init_dashboard.py"
@@ -102,10 +102,13 @@ def check_root():
         print_error("This script must be run as root (use sudo)")
         sys.exit(1)
 
-def run_command(command, shell=True, check=True):
+def run_command(command, shell=True, check=True, timeout=300):
     try:
-        result = subprocess.run(command, shell=shell, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(command, shell=shell, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
         return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        print_error(f"Command timed out: {command}")
+        return False
     except subprocess.CalledProcessError:
         return False
 
@@ -120,17 +123,25 @@ def create_user():
 
 def update_system():
     print_header("Updating System Packages")
-    if run_command('apt-get update -qq'):
+    print_info("Updating package lists...")
+    if run_command('apt-get update -qq', timeout=120):
         print_success("Package lists updated")
-    if run_command('apt-get upgrade -y -qq'):
+    else:
+        print_warning("Package list update had issues, continuing...")
+    
+    print_info("Upgrading packages (this may take several minutes)...")
+    upgrade_cmd = 'DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"'
+    if run_command(upgrade_cmd, timeout=600):
         print_success("System packages upgraded")
+    else:
+        print_warning("Package upgrade had issues, continuing with installation...")
 
 def install_dependencies():
     print_header("Installing Dependencies")
     packages = ['python3', 'python3-pip', 'python3-venv', 'nginx', 'git', 'curl', 'chromium-browser', 'unclutter', 'x11-xserver-utils', 'xdotool']
     print_info(f"Installing {len(packages)} packages...")
-    cmd = f"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {' '.join(packages)}"
-    if run_command(cmd):
+    cmd = f"DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' {' '.join(packages)}"
+    if run_command(cmd, timeout=600):
         print_success("All dependencies installed")
     else:
         print_error("Failed to install dependencies")
@@ -146,13 +157,13 @@ def create_directory_structure():
 def setup_python_environment():
     print_info("Setting up Python virtual environment...")
     venv_path = f"{INSTALL_DIR}/venv"
-    if not run_command(f'sudo -u {USER} python3 -m venv {venv_path}'):
+    if not run_command(f'sudo -u {USER} python3 -m venv {venv_path}', timeout=120):
         print_error("Failed to create virtual environment")
         sys.exit(1)
     print_success("Virtual environment created")
     print_info("Installing Python packages...")
-    run_command(f'sudo -u {USER} {venv_path}/bin/pip install --quiet --upgrade pip')
-    if run_command(f'sudo -u {USER} {venv_path}/bin/pip install --quiet flask flask-cors requests gunicorn'):
+    run_command(f'sudo -u {USER} {venv_path}/bin/pip install --quiet --upgrade pip', timeout=120)
+    if run_command(f'sudo -u {USER} {venv_path}/bin/pip install --quiet flask flask-cors requests gunicorn', timeout=300):
         print_success("Python packages installed")
     else:
         print_error("Failed to install Python packages")
