@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-SCRIPT_VERSION = "2.0.3"
+SCRIPT_VERSION = "2.0.5"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 SCRIPT_URL_V1 = f"{GITHUB_RAW}/init_dashboard.py"
@@ -410,45 +410,44 @@ class EeroAPI:
         except Exception as e:
             logging.error(f"Error fetching bandwidth: {{e}}")
             return None
-    
-    def get_channel_utilization(self, band):
-        try:
-            end_time = datetime.now()
-            start_time = end_time - timedelta(minutes=1)
-            
-            start_iso = start_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            end_iso = end_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            
-            url = f"{{EERO_API_BASE}}/networks/{{NETWORK_ID}}/channel_utilization?start={{start_iso}}&end={{end_iso}}&band={{band}}"
-            response = self.session.get(url, headers=self.get_headers(), timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logging.error(f"Error fetching channel utilization for {{band}}: {{e}}")
-            return None
 
 def categorize_device_type(device):
     manufacturer = device.get('manufacturer', '').lower()
     hostname = device.get('hostname', '').lower()
-    nickname = device.get('nickname', '').lower()
+    nickname = device.get('nickname', '').lower() if device.get('nickname') else ''
+    device_type = device.get('device_type', '').lower()
     
-    combined = f"{{manufacturer}} {{hostname}} {{nickname}}"
+    apple_keywords = ['apple', 'iphone', 'ipad', 'ipod', 'macbook', 'imac', 'mac mini', 'apple watch', 'airpods']
+    android_keywords = ['android', 'samsung', 'google', 'pixel', 'oneplus', 'huawei', 'xiaomi', 'oppo', 'lg', 'motorola', 'sony']
     
-    if 'iphone' in combined or 'ipad' in combined or 'apple' in combined or 'ios' in combined:
-        return 'iPhone'
-    elif 'android' in combined or 'samsung' in combined or 'google' in combined or 'pixel' in combined:
-        return 'Android'
-    else:
-        return 'Other'
+    combined = f"{{manufacturer}} {{hostname}} {{nickname}} {{device_type}}"
+    
+    for keyword in apple_keywords:
+        if keyword in combined:
+            return 'iPhone'
+    
+    for keyword in android_keywords:
+        if keyword in combined:
+            return 'Android'
+    
+    return 'Other'
+
+def get_device_frequency(device):
+    interface = device.get('interface', {{}})
+    frequency = interface.get('frequency', '')
+    
+    if frequency:
+        freq_str = str(frequency).replace('.', '_')
+        return f"{{freq_str}} GHz"
+    
+    return 'Unknown'
 
 eero_api = EeroAPI()
 data_cache = {{
     'connected_users': [],
     'device_types': {{}},
+    'frequency_distribution': {{}},
     'bandwidth': [],
-    'channel_utilization_2_4': [],
-    'channel_utilization_5': [],
-    'channel_utilization_6': [],
     'devices': [],
     'last_update': None,
     'speedtest_running': False,
@@ -468,12 +467,22 @@ def update_cache():
             data_cache['connected_users'] = [entry for entry in data_cache['connected_users'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
             
             device_types = {{'iPhone': 0, 'Android': 0, 'Other': 0}}
+            frequency_dist = {{'2.4 GHz': 0, '5 GHz': 0, '6 GHz': 0}}
             
             for device in connected:
                 device_type = categorize_device_type(device)
                 device_types[device_type] += 1
+                
+                frequency = get_device_frequency(device)
+                if frequency == '2.4 GHz':
+                    frequency_dist['2.4 GHz'] += 1
+                elif frequency == '5 GHz':
+                    frequency_dist['5 GHz'] += 1
+                elif frequency == '6 GHz':
+                    frequency_dist['6 GHz'] += 1
             
             data_cache['device_types'] = device_types
+            data_cache['frequency_distribution'] = frequency_dist
             
             device_list = []
             for device in connected:
@@ -487,7 +496,8 @@ def update_cache():
                     'signal_avg': connection.get('signal_avg', 0),
                     'wifi_standard': connection.get('wifi_standard', 'Unknown'),
                     'connected_at': device.get('connected', {{}}).get('last_changed', 'Unknown'),
-                    'device_type': categorize_device_type(device)
+                    'device_type': categorize_device_type(device),
+                    'frequency': get_device_frequency(device)
                 }}
                 device_list.append(device_info)
             data_cache['devices'] = sorted(device_list, key=lambda x: x['name'].lower())
@@ -502,45 +512,6 @@ def update_cache():
             }})
             two_hours_ago = current_time - timedelta(hours=2)
             data_cache['bandwidth'] = [entry for entry in data_cache['bandwidth'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
-        
-        channel_2_4 = eero_api.get_channel_utilization('band_2_4GHz')
-        if channel_2_4 and 'data' in channel_2_4:
-            current_time = datetime.now()
-            utilization_data = channel_2_4.get('data', [])
-            if utilization_data:
-                avg_util = sum([d.get('utilization', 0) for d in utilization_data]) / len(utilization_data)
-                data_cache['channel_utilization_2_4'].append({{
-                    'timestamp': current_time.isoformat(),
-                    'utilization': round(avg_util, 2)
-                }})
-                two_hours_ago = current_time - timedelta(hours=2)
-                data_cache['channel_utilization_2_4'] = [entry for entry in data_cache['channel_utilization_2_4'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
-        
-        channel_5 = eero_api.get_channel_utilization('band_5GHz')
-        if channel_5 and 'data' in channel_5:
-            current_time = datetime.now()
-            utilization_data = channel_5.get('data', [])
-            if utilization_data:
-                avg_util = sum([d.get('utilization', 0) for d in utilization_data]) / len(utilization_data)
-                data_cache['channel_utilization_5'].append({{
-                    'timestamp': current_time.isoformat(),
-                    'utilization': round(avg_util, 2)
-                }})
-                two_hours_ago = current_time - timedelta(hours=2)
-                data_cache['channel_utilization_5'] = [entry for entry in data_cache['channel_utilization_5'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
-        
-        channel_6 = eero_api.get_channel_utilization('band_6GHz')
-        if channel_6 and 'data' in channel_6:
-            current_time = datetime.now()
-            utilization_data = channel_6.get('data', [])
-            if utilization_data:
-                avg_util = sum([d.get('utilization', 0) for d in utilization_data]) / len(utilization_data)
-                data_cache['channel_utilization_6'].append({{
-                    'timestamp': current_time.isoformat(),
-                    'utilization': round(avg_util, 2)
-                }})
-                two_hours_ago = current_time - timedelta(hours=2)
-                data_cache['channel_utilization_6'] = [entry for entry in data_cache['channel_utilization_6'] if datetime.fromisoformat(entry['timestamp']) > two_hours_ago]
         
         data_cache['last_update'] = datetime.now().isoformat()
         logging.info("Cache updated successfully")
@@ -744,10 +715,6 @@ def create_frontend():
             flex-direction: column;
         }
         
-        .chart-card.channel-utilization {
-            padding: 5px;
-        }
-        
         .chart-title {
             font-size: 14px;
             font-weight: 600;
@@ -758,37 +725,7 @@ def create_frontend():
             letter-spacing: 0.5px;
         }
         
-        .mini-chart-title {
-            font-size: 10px;
-            font-weight: 600;
-            margin-bottom: 3px;
-            text-align: center;
-            color: #4da6ff;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-        }
-        
         .chart-container {
-            flex: 1;
-            position: relative;
-            min-height: 0;
-        }
-        
-        .channel-charts-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-        
-        .mini-chart-wrapper {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-        
-        .mini-chart-container {
             flex: 1;
             position: relative;
             min-height: 0;
@@ -998,26 +935,10 @@ def create_frontend():
                 <canvas id="downloadChart"></canvas>
             </div>
         </div>
-        <div class="chart-card channel-utilization">
-            <div class="channel-charts-container">
-                <div class="mini-chart-wrapper">
-                    <div class="mini-chart-title">6 GHz Channel</div>
-                    <div class="mini-chart-container">
-                        <canvas id="channel6Chart"></canvas>
-                    </div>
-                </div>
-                <div class="mini-chart-wrapper">
-                    <div class="mini-chart-title">5 GHz Channel</div>
-                    <div class="mini-chart-container">
-                        <canvas id="channel5Chart"></canvas>
-                    </div>
-                </div>
-                <div class="mini-chart-wrapper">
-                    <div class="mini-chart-title">2.4 GHz Channel</div>
-                    <div class="mini-chart-container">
-                        <canvas id="channel24Chart"></canvas>
-                    </div>
-                </div>
+        <div class="chart-card">
+            <div class="chart-title">Frequency Distribution</div>
+            <div class="chart-container">
+                <canvas id="frequencyChart"></canvas>
             </div>
         </div>
     </div>
@@ -1034,9 +955,9 @@ def create_frontend():
                     <tr>
                         <th>Device Name</th>
                         <th>Type</th>
+                        <th>Frequency</th>
                         <th>IP Address</th>
                         <th>Manufacturer</th>
-                        <th>WiFi</th>
                         <th>Signal Avg</th>
                     </tr>
                 </thead>
@@ -1064,7 +985,7 @@ def create_frontend():
     </div>
 
     <script>
-        let charts = { users: null, deviceType: null, download: null, channel6: null, channel5: null, channel24: null };
+        let charts = { users: null, deviceType: null, download: null, frequency: null };
         const chartColors = {
             primary: '#4da6ff',
             secondary: '#ff6b6b',
@@ -1075,28 +996,6 @@ def create_frontend():
             orange: '#ff922b'
         };
         
-        const commonOptions = {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                y: {
-                    ticks: { color: '#ffffff', font: { size: 8 } },
-                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                    min: 0,
-                    max: 100
-                },
-                x: {
-                    ticks: { color: '#ffffff', font: { size: 7 } },
-                    grid: { color: 'rgba(255, 255, 255, 0.1)' }
-                }
-            }
-        };
-
         const mainChartOptions = {
             responsive: true,
             maintainAspectRatio: false,
@@ -1189,58 +1088,36 @@ def create_frontend():
                 options: mainChartOptions
             });
 
-            const channel6Ctx = document.getElementById('channel6Chart').getContext('2d');
-            charts.channel6 = new Chart(channel6Ctx, {
-                type: 'line',
+            const frequencyCtx = document.getElementById('frequencyChart').getContext('2d');
+            charts.frequency = new Chart(frequencyCtx, {
+                type: 'doughnut',
                 data: {
-                    labels: [],
+                    labels: ['2.4 GHz', '5 GHz', '6 GHz'],
                     datasets: [{
-                        label: '6 GHz',
-                        data: [],
-                        borderColor: chartColors.purple,
-                        backgroundColor: 'rgba(177, 151, 252, 0.1)',
-                        tension: 0.4,
-                        fill: true,
-                        borderWidth: 1.5
+                        data: [0, 0, 0],
+                        backgroundColor: [
+                            chartColors.orange,
+                            chartColors.info,
+                            chartColors.purple
+                        ],
+                        borderWidth: 2,
+                        borderColor: '#001a33'
                     }]
                 },
-                options: commonOptions
-            });
-
-            const channel5Ctx = document.getElementById('channel5Chart').getContext('2d');
-            charts.channel5 = new Chart(channel5Ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: '5 GHz',
-                        data: [],
-                        borderColor: chartColors.info,
-                        backgroundColor: 'rgba(116, 192, 252, 0.1)',
-                        tension: 0.4,
-                        fill: true,
-                        borderWidth: 1.5
-                    }]
-                },
-                options: commonOptions
-            });
-
-            const channel24Ctx = document.getElementById('channel24Chart').getContext('2d');
-            charts.channel24 = new Chart(channel24Ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: '2.4 GHz',
-                        data: [],
-                        borderColor: chartColors.orange,
-                        backgroundColor: 'rgba(255, 146, 43, 0.1)',
-                        tension: 0.4,
-                        fill: true,
-                        borderWidth: 1.5
-                    }]
-                },
-                options: commonOptions
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#ffffff',
+                                font: { size: 10 },
+                                padding: 8
+                            }
+                        }
+                    }
+                }
             });
         }
 
@@ -1276,32 +1153,13 @@ def create_frontend():
                 charts.download.data.datasets[0].data = downloadData;
                 charts.download.update();
 
-                const channel6Labels = data.channel_utilization_6.map(entry => {
-                    const date = new Date(entry.timestamp);
-                    return date.toLocaleTimeString();
-                });
-                const channel6Data = data.channel_utilization_6.map(entry => entry.utilization);
-                charts.channel6.data.labels = channel6Labels;
-                charts.channel6.data.datasets[0].data = channel6Data;
-                charts.channel6.update();
-
-                const channel5Labels = data.channel_utilization_5.map(entry => {
-                    const date = new Date(entry.timestamp);
-                    return date.toLocaleTimeString();
-                });
-                const channel5Data = data.channel_utilization_5.map(entry => entry.utilization);
-                charts.channel5.data.labels = channel5Labels;
-                charts.channel5.data.datasets[0].data = channel5Data;
-                charts.channel5.update();
-
-                const channel24Labels = data.channel_utilization_2_4.map(entry => {
-                    const date = new Date(entry.timestamp);
-                    return date.toLocaleTimeString();
-                });
-                const channel24Data = data.channel_utilization_2_4.map(entry => entry.utilization);
-                charts.channel24.data.labels = channel24Labels;
-                charts.channel24.data.datasets[0].data = channel24Data;
-                charts.channel24.update();
+                const frequencyDist = data.frequency_distribution || { '2.4 GHz': 0, '5 GHz': 0, '6 GHz': 0 };
+                charts.frequency.data.datasets[0].data = [
+                    frequencyDist['2.4 GHz'] || 0,
+                    frequencyDist['5 GHz'] || 0,
+                    frequencyDist['6 GHz'] || 0
+                ];
+                charts.frequency.update();
 
                 const lastUpdate = new Date(data.last_update);
                 document.getElementById('lastUpdate').textContent = `Updated: ${lastUpdate.toLocaleTimeString()}`;
@@ -1335,9 +1193,9 @@ def create_frontend():
                     <tr>
                         <td><strong>${device.name}</strong></td>
                         <td>${device.device_type}</td>
+                        <td>${device.frequency}</td>
                         <td>${device.ip}</td>
                         <td>${device.manufacturer}</td>
-                        <td>${device.wifi_standard}</td>
                         <td>
                             <div class="signal-bar">
                                 <div class="signal-fill ${getSignalClass(device.signal_avg)}" 
@@ -1653,12 +1511,12 @@ def print_completion_message():
     print_header("Installation Complete!")
     print_success(f"Eero Dashboard v{SCRIPT_VERSION} installed successfully!")
     print()
-    print_color(Colors.CYAN, "🎉 What's New in v2.0.3:")
-    print_color(Colors.GREEN, "  ✓ Channel Utilization monitoring (2.4 / 5 / 6 GHz)")
-    print_color(Colors.GREEN, "  ✓ Three stacked mini-graphs for channel data")
-    print_color(Colors.GREEN, "  ✓ Real-time channel performance tracking")
-    print_color(Colors.GREEN, "  ✓ Updates every 60 seconds automatically")
-    print_color(Colors.GREEN, "  ✓ Replaced signal strength with channel metrics")
+    print_color(Colors.CYAN, "🎉 What's New in v2.0.5:")
+    print_color(Colors.GREEN, "  ✓ Frequency Distribution pie chart (2.4/5/6 GHz)")
+    print_color(Colors.GREEN, "  ✓ Replaced channel utilization with client frequency breakdown")
+    print_color(Colors.GREEN, "  ✓ Shows count of devices on each WiFi band")
+    print_color(Colors.GREEN, "  ✓ Device table now includes frequency column")
+    print_color(Colors.GREEN, "  ✓ Real-time frequency tracking per device")
     print()
     print_info("Next steps:")
     print(f"  1. Place logo: sudo cp eero-logo.png {INSTALL_DIR}/frontend/assets/")
