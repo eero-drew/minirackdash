@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-SCRIPT_VERSION = "2.0.9"
+SCRIPT_VERSION = "2.0.10"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 SCRIPT_URL_V1 = f"{GITHUB_RAW}/init_dashboard.py"
@@ -425,7 +425,6 @@ class EeroAPI:
             # Log sample device for debugging
             if all_devices:
                 logging.debug(f"Sample device structure: {{all_devices[0].keys()}}")
-                logging.debug(f"Sample device: {{all_devices[0]}}")
             
             return all_devices
             
@@ -448,34 +447,85 @@ def safe_lower(value, default=''):
     return str(value).lower()
 
 def categorize_device_os(device):
-    \"\"\"Categorize device by OS based on manufacturer\"\"\"
+    \"\"\"Categorize device by OS based on multiple fields\"\"\"
     manufacturer = safe_lower(device.get('manufacturer'), '')
-    hostname = safe_str(device.get('hostname'), 'Unknown')
+    device_type = safe_lower(device.get('device_type'), '')
+    hostname = safe_lower(device.get('hostname'), '')
+    model_name = safe_lower(device.get('model_name'), '')
+    display_name = safe_lower(device.get('display_name'), '')
     
-    logging.debug(f"Categorizing device: {{hostname}} - Manufacturer: {{manufacturer}}")
+    # Combine all text fields for analysis
+    all_text = f"{{manufacturer}} {{device_type}} {{hostname}} {{model_name}} {{display_name}}"
     
-    if not manufacturer:
-        return 'Other'
+    logging.debug(f"Categorizing device:")
+    logging.debug(f"  Manufacturer: {{manufacturer or 'None'}}")
+    logging.debug(f"  Device Type: {{device_type or 'None'}}")
+    logging.debug(f"  Hostname: {{hostname or 'None'}}")
+    logging.debug(f"  Model: {{model_name or 'None'}}")
+    logging.debug(f"  Combined text: {{all_text}}")
     
-    # Apple devices
-    apple_keywords = ['apple', 'inc']
+    # Apple/iOS devices - check all fields
+    apple_keywords = ['apple', 'iphone', 'ipad', 'ipod', 'mac', 'macbook', 'airpods', 'apple watch', 'ios']
     for keyword in apple_keywords:
-        if keyword in manufacturer:
+        if keyword in all_text:
+            logging.debug(f"  -> Matched iOS (keyword: {{keyword}})")
             return 'iOS'
     
-    # Android devices
-    android_keywords = ['samsung', 'google', 'huawei', 'xiaomi', 'oppo', 'lg', 'motorola', 'sony', 'oneplus', 'htc', 'asus', 'lenovo']
+    # Android devices - check all fields
+    android_keywords = [
+        'android', 'samsung', 'google', 'pixel', 'huawei', 'xiaomi', 
+        'oppo', 'lg', 'motorola', 'sony', 'oneplus', 'htc', 'asus', 
+        'lenovo', 'nokia', 'vivo', 'realme', 'redmi'
+    ]
     for keyword in android_keywords:
-        if keyword in manufacturer:
+        if keyword in all_text:
+            logging.debug(f"  -> Matched Android (keyword: {{keyword}})")
             return 'Android'
     
     # Windows devices
-    windows_keywords = ['microsoft', 'dell', 'hp', 'lenovo', 'asus', 'acer', 'toshiba']
+    windows_keywords = [
+        'windows', 'microsoft', 'dell', 'hp', 'lenovo', 'asus', 
+        'acer', 'toshiba', 'surface', 'pc', 'laptop'
+    ]
     for keyword in windows_keywords:
-        if keyword in manufacturer:
+        if keyword in all_text:
+            logging.debug(f"  -> Matched Windows (keyword: {{keyword}})")
             return 'Windows'
     
+    # Check device_type field for additional clues
+    if device_type:
+        if 'phone' in device_type or 'mobile' in device_type:
+            logging.debug(f"  -> Phone detected, defaulting to Android")
+            return 'Android'
+        elif 'tablet' in device_type:
+            logging.debug(f"  -> Tablet detected, defaulting to Android")
+            return 'Android'
+        elif 'computer' in device_type or 'laptop' in device_type:
+            logging.debug(f"  -> Computer detected, defaulting to Windows")
+            return 'Windows'
+    
+    logging.debug(f"  -> No match found, returning Other")
     return 'Other'
+
+def estimate_signal_from_bars(score_bars):
+    \"\"\"Estimate signal strength in dBm from score_bars\"\"\"
+    # eero score_bars mapping (approximate):
+    # 5 bars = Excellent: -30 to -50 dBm
+    # 4 bars = Very Good: -50 to -60 dBm
+    # 3 bars = Good: -60 to -70 dBm
+    # 2 bars = Fair: -70 to -80 dBm
+    # 1 bar = Poor: -80 to -90 dBm
+    
+    score_map = {{
+        5: -45,
+        4: -55,
+        3: -65,
+        2: -75,
+        1: -85,
+        0: -90
+    }}
+    
+    return score_map.get(score_bars, -90)
 
 def get_signal_quality(score_bars):
     \"\"\"Convert score_bars to quality rating\"\"\"
@@ -483,8 +533,10 @@ def get_signal_quality(score_bars):
         return 'Unknown'
     try:
         bars = int(score_bars)
-        if bars >= 4:
+        if bars >= 5:
             return 'Excellent'
+        elif bars == 4:
+            return 'Very Good'
         elif bars == 3:
             return 'Good'
         elif bars == 2:
@@ -524,7 +576,7 @@ def parse_frequency(interface):
             return 'N/A', 'Unknown'
         
         freq = interface.get('frequency')
-        if freq is None or freq == 'N/A' or freq == '':
+        if freq is None or freq == 'N/A' or freq == '' or freq == 0:
             return 'N/A', 'Unknown'
         
         # Convert to float for comparison
@@ -583,6 +635,8 @@ def update_cache():
             
             if is_connected and (connection_type == 'wireless' or is_wireless):
                 wireless_connected.append(device)
+                # Log full device info for connected wireless devices
+                logging.debug(f"Wireless device full data: {{device}}")
         
         logging.info(f"Found {{len(wireless_connected)}} connected wireless devices")
         
@@ -624,15 +678,25 @@ def update_cache():
             
             # Get signal strength
             signal_avg_dbm = connectivity.get('signal_avg')
-            signal_percent = convert_signal_dbm_to_percent(signal_avg_dbm)
             score_bars = connectivity.get('score_bars', 0)
+            
+            # If signal_avg is None, estimate from score_bars
+            if signal_avg_dbm is None and score_bars is not None and score_bars > 0:
+                signal_avg_dbm = estimate_signal_from_bars(score_bars)
+                logging.debug(f"Estimated signal from score_bars {{score_bars}}: {{signal_avg_dbm}} dBm")
+            
+            signal_percent = convert_signal_dbm_to_percent(signal_avg_dbm)
             
             # Add to signal strength list for averaging
             if signal_avg_dbm is not None:
                 try:
-                    signal_str = str(signal_avg_dbm).replace(' dBm', '').strip()
-                    signal_float = float(signal_str)
+                    if isinstance(signal_avg_dbm, (int, float)):
+                        signal_float = float(signal_avg_dbm)
+                    else:
+                        signal_str = str(signal_avg_dbm).replace(' dBm', '').strip()
+                        signal_float = float(signal_str)
                     signal_strengths.append(signal_float)
+                    logging.debug(f"Added signal strength: {{signal_float}} dBm")
                 except Exception as e:
                     logging.debug(f"Could not parse signal_avg {{signal_avg_dbm}}: {{e}}")
             
@@ -646,7 +710,7 @@ def update_cache():
                 'mac': safe_str(device.get('mac'), 'N/A'),
                 'manufacturer': safe_str(device.get('manufacturer'), 'Unknown'),
                 'signal_avg': signal_percent,
-                'signal_avg_dbm': safe_str(signal_avg_dbm, 'N/A'),
+                'signal_avg_dbm': f"{{signal_avg_dbm}} dBm" if signal_avg_dbm is not None else 'N/A',
                 'score_bars': score_bars,
                 'signal_quality': get_signal_quality(score_bars),
                 'device_os': os_type,
@@ -674,7 +738,7 @@ def update_cache():
                 if datetime.fromisoformat(entry['timestamp']) > two_hours_ago
             ]
             
-            logging.info(f"Average signal strength: {{avg_signal:.2f}} dBm")
+            logging.info(f"Average signal strength: {{avg_signal:.2f}} dBm (from {{len(signal_strengths)}} devices)")
         else:
             logging.info("No signal strength data available")
         
@@ -755,13 +819,13 @@ def health_check():
 @app.route('/api/version')
 def get_version():
     return jsonify({{
-        'version': '{SCRIPT_VERSION}',
+        'version': '2.0.10',
         'name': 'Eero Dashboard',
         'repository': 'https://github.com/{GITHUB_REPO}'
     }})
 
 if __name__ == '__main__':
-    logging.info("Starting Eero Dashboard Backend v{SCRIPT_VERSION}")
+    logging.info("Starting Eero Dashboard Backend v2.0.10")
     update_cache()
     app.run(host='127.0.0.1', port=5000, debug=False)
 """
@@ -1090,7 +1154,7 @@ def create_frontend():
     <div class="header">
         <div class="logo-container">
             <img src="/assets/eero-logo.png" alt="Eero" class="logo" onerror="this.style.display='none'">
-            <div class="header-title">Network Dashboard v2.0.9</div>
+            <div class="header-title">Network Dashboard v2.0.10</div>
         </div>
         <div class="header-actions">
             <div class="status-indicator">
@@ -1740,20 +1804,20 @@ def print_completion_message():
     print_header("Installation Complete!")
     print_success(f"Eero Dashboard v{SCRIPT_VERSION} installed successfully!")
     print()
-    print_color(Colors.CYAN, "🎉 What's New in v2.0.9:")
-    print_color(Colors.GREEN, "  ✓ Fixed None value handling for manufacturer field")
-    print_color(Colors.GREEN, "  ✓ Fixed None value handling for all device fields")
-    print_color(Colors.GREEN, "  ✓ Removed broken bandwidth/insights API call")
-    print_color(Colors.GREEN, "  ✓ Improved error handling and logging")
-    print_color(Colors.GREEN, "  ✓ Dashboard should now display all data correctly")
+    print_color(Colors.CYAN, "🎉 What's New in v2.0.10:")
+    print_color(Colors.GREEN, "  ✓ Enhanced device OS detection using ALL available fields")
+    print_color(Colors.GREEN, "  ✓ Checks manufacturer, hostname, model_name, device_type, display_name")
+    print_color(Colors.GREEN, "  ✓ Signal strength estimation from score_bars when signal_avg is None")
+    print_color(Colors.GREEN, "  ✓ Improved logging for device categorization debugging")
+    print_color(Colors.GREEN, "  ✓ Fixed average signal strength calculation")
     print()
     print_info("Next steps:")
     print(f"  1. Restart service: sudo systemctl restart eero-dashboard")
     print(f"  2. Check logs: tail -f {INSTALL_DIR}/logs/backend.log")
-    print(f"  3. Check browser console (F12) for frontend data")
+    print(f"  3. Look for 'Categorizing device' and 'Matched' lines in logs")
     print(f"  4. Access dashboard: http://localhost")
     print()
-    print_warning("⚠️  The dashboard should now be working!")
+    print_warning("⚠️  Check the logs to see what device info is being detected!")
 
 def main():
     os.system('clear')
