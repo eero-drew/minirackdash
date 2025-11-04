@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-SCRIPT_VERSION = "2.0.8"
+SCRIPT_VERSION = "2.0.9"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 SCRIPT_URL_V1 = f"{GITHUB_RAW}/init_dashboard.py"
@@ -397,24 +397,9 @@ class EeroAPI:
             headers['X-User-Token'] = self.api_token
         return headers
     
-    def get_network_info(self):
-        \"\"\"Get network information including profiles\"\"\"
-        try:
-            url = f"{{EERO_API_BASE}}/networks/{{NETWORK_ID}}"
-            logging.debug(f"Fetching network info from: {{url}}")
-            response = self.session.get(url, headers=self.get_headers(), timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            logging.debug(f"Network info response: {{data}}")
-            return data
-        except Exception as e:
-            logging.error(f"Error fetching network info: {{e}}")
-            return None
-    
     def get_all_devices(self):
-        \"\"\"Get all devices from all profiles\"\"\"
+        \"\"\"Get all devices from the network\"\"\"
         try:
-            # First, try the direct devices endpoint
             url = f"{{EERO_API_BASE}}/networks/{{NETWORK_ID}}/devices"
             logging.debug(f"Fetching devices from: {{url}}")
             response = self.session.get(url, headers=self.get_headers(), timeout=10)
@@ -450,11 +435,27 @@ class EeroAPI:
             logging.error(traceback.format_exc())
             return []
 
+def safe_str(value, default=''):
+    \"\"\"Safely convert value to string, handling None\"\"\"
+    if value is None:
+        return default
+    return str(value)
+
+def safe_lower(value, default=''):
+    \"\"\"Safely convert value to lowercase string, handling None\"\"\"
+    if value is None:
+        return default
+    return str(value).lower()
+
 def categorize_device_os(device):
     \"\"\"Categorize device by OS based on manufacturer\"\"\"
-    manufacturer = device.get('manufacturer', '').lower()
+    manufacturer = safe_lower(device.get('manufacturer'), '')
+    hostname = safe_str(device.get('hostname'), 'Unknown')
     
-    logging.debug(f"Categorizing device: {{device.get('hostname', 'Unknown')}} - Manufacturer: {{manufacturer}}")
+    logging.debug(f"Categorizing device: {{hostname}} - Manufacturer: {{manufacturer}}")
+    
+    if not manufacturer:
+        return 'Other'
     
     # Apple devices
     apple_keywords = ['apple', 'inc']
@@ -478,21 +479,27 @@ def categorize_device_os(device):
 
 def get_signal_quality(score_bars):
     \"\"\"Convert score_bars to quality rating\"\"\"
-    if score_bars >= 4:
-        return 'Excellent'
-    elif score_bars == 3:
-        return 'Good'
-    elif score_bars == 2:
-        return 'Fair'
-    elif score_bars == 1:
-        return 'Poor'
-    else:
+    if score_bars is None:
+        return 'Unknown'
+    try:
+        bars = int(score_bars)
+        if bars >= 4:
+            return 'Excellent'
+        elif bars == 3:
+            return 'Good'
+        elif bars == 2:
+            return 'Fair'
+        elif bars == 1:
+            return 'Poor'
+        else:
+            return 'Unknown'
+    except:
         return 'Unknown'
 
 def convert_signal_dbm_to_percent(signal_dbm_str):
     \"\"\"Convert dBm signal strength to percentage\"\"\"
     try:
-        if not signal_dbm_str or signal_dbm_str == 'N/A':
+        if not signal_dbm_str or signal_dbm_str == 'N/A' or signal_dbm_str is None:
             return 0
         
         # Handle different formats: "-80 dBm", "-80", etc.
@@ -507,14 +514,17 @@ def convert_signal_dbm_to_percent(signal_dbm_str):
         else:
             return int(2 * (signal_dbm + 100))
     except Exception as e:
-        logging.error(f"Error converting signal {{signal_dbm_str}}: {{e}}")
+        logging.debug(f"Error converting signal {{signal_dbm_str}}: {{e}}")
         return 0
 
 def parse_frequency(interface):
     \"\"\"Parse frequency from interface data\"\"\"
     try:
-        freq = interface.get('frequency', 'N/A')
-        if freq == 'N/A' or not freq:
+        if interface is None:
+            return 'N/A', 'Unknown'
+        
+        freq = interface.get('frequency')
+        if freq is None or freq == 'N/A' or freq == '':
             return 'N/A', 'Unknown'
         
         # Convert to float for comparison
@@ -531,7 +541,8 @@ def parse_frequency(interface):
             band = 'Unknown'
         
         return f"{{freq}} GHz", band
-    except:
+    except Exception as e:
+        logging.debug(f"Error parsing frequency: {{e}}")
         return 'N/A', 'Unknown'
 
 eero_api = EeroAPI()
@@ -564,10 +575,11 @@ def update_cache():
         wireless_connected = []
         for device in all_devices:
             is_connected = device.get('connected', False)
-            connection_type = device.get('connection_type', '').lower()
+            connection_type = safe_lower(device.get('connection_type'), '')
             is_wireless = device.get('wireless', False)
+            hostname = safe_str(device.get('hostname'), 'None')
             
-            logging.debug(f"Device {{device.get('hostname', 'Unknown')}}: connected={{is_connected}}, type={{connection_type}}, wireless={{is_wireless}}")
+            logging.debug(f"Device {{hostname}}: connected={{is_connected}}, type={{connection_type}}, wireless={{is_wireless}}")
             
             if is_connected and (connection_type == 'wireless' or is_wireless):
                 wireless_connected.append(device)
@@ -602,8 +614,8 @@ def update_cache():
             device_os[os_type] += 1
             
             # Get connectivity info
-            connectivity = device.get('connectivity', {{}})
-            interface = device.get('interface', {{}})
+            connectivity = device.get('connectivity', {{}}) or {{}}
+            interface = device.get('interface', {{}}) or {{}}
             
             # Parse frequency
             freq_display, freq_band = parse_frequency(interface)
@@ -611,26 +623,30 @@ def update_cache():
                 frequency_dist[freq_band] += 1
             
             # Get signal strength
-            signal_avg_dbm = connectivity.get('signal_avg', 'N/A')
+            signal_avg_dbm = connectivity.get('signal_avg')
             signal_percent = convert_signal_dbm_to_percent(signal_avg_dbm)
             score_bars = connectivity.get('score_bars', 0)
             
             # Add to signal strength list for averaging
-            if signal_avg_dbm != 'N/A':
+            if signal_avg_dbm is not None:
                 try:
                     signal_str = str(signal_avg_dbm).replace(' dBm', '').strip()
-                    signal_strengths.append(float(signal_str))
-                except:
-                    pass
+                    signal_float = float(signal_str)
+                    signal_strengths.append(signal_float)
+                except Exception as e:
+                    logging.debug(f"Could not parse signal_avg {{signal_avg_dbm}}: {{e}}")
+            
+            # Build device name
+            device_name = device.get('nickname') or device.get('hostname') or device.get('display_name') or 'Unknown Device'
             
             # Build device info
             device_info = {{
-                'name': device.get('nickname') or device.get('hostname', 'Unknown Device'),
+                'name': safe_str(device_name),
                 'ip': ', '.join(device.get('ips', [])) if device.get('ips') else 'N/A',
-                'mac': device.get('mac', 'N/A'),
-                'manufacturer': device.get('manufacturer', 'Unknown'),
+                'mac': safe_str(device.get('mac'), 'N/A'),
+                'manufacturer': safe_str(device.get('manufacturer'), 'Unknown'),
                 'signal_avg': signal_percent,
-                'signal_avg_dbm': signal_avg_dbm,
+                'signal_avg_dbm': safe_str(signal_avg_dbm, 'N/A'),
                 'score_bars': score_bars,
                 'signal_quality': get_signal_quality(score_bars),
                 'device_os': os_type,
@@ -657,13 +673,16 @@ def update_cache():
                 entry for entry in data_cache['signal_strength_avg']
                 if datetime.fromisoformat(entry['timestamp']) > two_hours_ago
             ]
+            
+            logging.info(f"Average signal strength: {{avg_signal:.2f}} dBm")
+        else:
+            logging.info("No signal strength data available")
         
         data_cache['last_update'] = current_time.isoformat()
         
         # Log summary
         logging.info(f"Device OS breakdown: {{device_os}}")
         logging.info(f"Frequency distribution: {{frequency_dist}}")
-        logging.info(f"Average signal strength: {{avg_signal if signal_strengths else 'N/A'}} dBm")
         logging.info(f"Processed {{len(device_list)}} devices for display")
         logging.info("Cache update complete")
         logging.info("=" * 60)
@@ -1071,7 +1090,7 @@ def create_frontend():
     <div class="header">
         <div class="logo-container">
             <img src="/assets/eero-logo.png" alt="Eero" class="logo" onerror="this.style.display='none'">
-            <div class="header-title">Network Dashboard v2.0.8</div>
+            <div class="header-title">Network Dashboard v2.0.9</div>
         </div>
         <div class="header-actions">
             <div class="status-indicator">
@@ -1721,23 +1740,20 @@ def print_completion_message():
     print_header("Installation Complete!")
     print_success(f"Eero Dashboard v{SCRIPT_VERSION} installed successfully!")
     print()
-    print_color(Colors.CYAN, "🎉 What's New in v2.0.8:")
-    print_color(Colors.GREEN, "  ✓ Fixed API data retrieval for device information")
-    print_color(Colors.GREEN, "  ✓ Replaced bandwidth widget with frequency distribution (2.4/5/6 GHz)")
-    print_color(Colors.GREEN, "  ✓ Signal quality now shows average strength over time")
-    print_color(Colors.GREEN, "  ✓ Enhanced debugging and logging")
-    print_color(Colors.GREEN, "  ✓ Improved data aggregation and visualization")
+    print_color(Colors.CYAN, "🎉 What's New in v2.0.9:")
+    print_color(Colors.GREEN, "  ✓ Fixed None value handling for manufacturer field")
+    print_color(Colors.GREEN, "  ✓ Fixed None value handling for all device fields")
+    print_color(Colors.GREEN, "  ✓ Removed broken bandwidth/insights API call")
+    print_color(Colors.GREEN, "  ✓ Improved error handling and logging")
+    print_color(Colors.GREEN, "  ✓ Dashboard should now display all data correctly")
     print()
     print_info("Next steps:")
-    print(f"  1. Place logo: sudo cp eero-logo.png {INSTALL_DIR}/frontend/assets/")
-    print(f"  2. Authenticate: sudo -u {USER} {INSTALL_DIR}/venv/bin/python3 {INSTALL_DIR}/setup_eero_auth.py")
-    print(f"  3. Restart: sudo systemctl restart eero-dashboard")
-    print(f"  4. Check logs: tail -f {INSTALL_DIR}/logs/backend.log")
-    print(f"  5. Check browser console (F12) for debugging")
-    print(f"  6. Access: http://localhost")
+    print(f"  1. Restart service: sudo systemctl restart eero-dashboard")
+    print(f"  2. Check logs: tail -f {INSTALL_DIR}/logs/backend.log")
+    print(f"  3. Check browser console (F12) for frontend data")
+    print(f"  4. Access dashboard: http://localhost")
     print()
-    print_warning("⚠️  Important: Use your API Development Email for authentication!")
-    print_warning("⚠️  Check backend logs for API response details!")
+    print_warning("⚠️  The dashboard should now be working!")
 
 def main():
     os.system('clear')
