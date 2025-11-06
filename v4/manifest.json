@@ -1,0 +1,36 @@
+{
+  "version": "4.0.0",
+  "release_date": "2024-01-15",
+  "components": {
+    "foundation": {
+      "version": "4.0.0",
+      "hash": "sha256:abc123...",
+      "required": true
+    },
+    "backend": {
+      "version": "4.0.0",
+      "hash": "sha256:def456...",
+      "required": true
+    },
+    "frontend": {
+      "version": "4.0.0",
+      "hash": "sha256:ghi789...",
+      "required": true
+    },
+    "auth_helper": {
+      "version": "4.0.0",
+      "hash": "sha256:jkl012...",
+      "required": true
+    },
+    "kiosk": {
+      "version": "4.0.0",
+      "hash": "sha256:mno345...",
+      "required": false
+    },
+    "systemd": {
+      "version": "4.0.0",
+      "hash": "sha256:pqr678...",
+      "required": true
+    }
+  }
+}
