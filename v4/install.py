@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Eero Dashboard v4.0.0 - Simplified Installer
+MiniRack Dashboard v4.0.1 - Simplified Installer
 Two-file system: installer + dashboard
 """
 import os
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-VERSION = "4.0.0"
+VERSION = "4.0.1"
 GITHUB_REPO = "eero-drew/minirackdash"
 GITHUB_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/v4"
 INSTALL_DIR = "/home/eero/dashboard"
@@ -230,7 +230,7 @@ class Installer:
         c(Colors.BOLD + Colors.BLUE, "\n=== Setting up Service ===\n")
         
         service_content = f"""[Unit]
-Description=Eero Dashboard v4 - The Gibson
+Description=MiniRack Dashboard v4 - The Gibson
 After=network.target
 
 [Service]
@@ -289,7 +289,7 @@ fi
         with open(desktop_path, 'w') as f:
             f.write(f"""[Desktop Entry]
 Type=Application
-Name=Eero Dashboard v4
+Name=MiniRack Dashboard v4
 Exec={kiosk_path}
 X-GNOME-Autostart-enabled=true
 """)
@@ -360,7 +360,7 @@ except Exception as e:
     def run(self):
         """Run installation"""
         c(Colors.BOLD + Colors.BLUE, f"\n{'='*70}")
-        c(Colors.BOLD + Colors.BLUE, f"{'Eero Dashboard v4.0.0 Installer'.center(70)}")
+        c(Colors.BOLD + Colors.BLUE, f"{'MiniRack Dashboard v4.0.1 Installer'.center(70)}")
         c(Colors.BOLD + Colors.BLUE, f"{'='*70}\n")
         
         check_root()
@@ -377,12 +377,12 @@ except Exception as e:
         c(Colors.BOLD + Colors.GREEN, "\n" + "="*70)
         c(Colors.BOLD + Colors.GREEN, "Installation Complete!".center(70))
         c(Colors.BOLD + Colors.GREEN, "="*70 + "\n")
-        c(Colors.CYAN, "🎉 What's New in v4:")
+        c(Colors.CYAN, "🎉 What's New in v4.0.1:")
+        c(Colors.GREEN, "  ✓ Fixed Pi symbol display")
+        c(Colors.GREEN, "  ✓ Renamed to MiniRack Dashboard")
         c(Colors.GREEN, "  ✓ 2-file system - simple & clean")
         c(Colors.GREEN, "  ✓ Resumable installation")
-        c(Colors.GREEN, "  ✓ No nginx - lightweight Flask")
         c(Colors.GREEN, "  ✓ The Gibson control panel")
-        c(Colors.GREEN, "  ✓ Config persists across updates")
         print()
         c(Colors.CYAN, "Next steps:")
         print(f"  1. Authorize: sudo {INSTALL_DIR}/setup_eero_auth.py")
