@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Eero Dashboard v4.0.0 - Complete Backend + Frontend
+MiniRack Dashboard v4.0.1 - Complete Backend + Frontend
 Single file with embedded HTML
 """
 import os
@@ -83,7 +83,7 @@ class EeroAPI:
     def get_headers(self):
         headers = {
             'Content-Type': 'application/json',
-            'User-Agent': 'Eero-Dashboard/4.0'
+            'User-Agent': 'MiniRack-Dashboard/4.0.1'
         }
         if self.api_token:
             headers['X-User-Token'] = self.api_token
@@ -378,7 +378,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Eero Network Dashboard v4 - The Gibson</title>
+    <title>MiniRack Dashboard v4.0.1 - The Gibson</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -415,7 +415,8 @@ HTML_CONTENT = """<!DOCTYPE html>
             z-index: 999;
             box-shadow: 0 4px 15px rgba(77, 166, 255, 0.5);
             transition: all 0.3s ease;
-            font-size: 16px;
+            font-size: 18px;
+            font-weight: bold;
             color: #ffffff;
             border: 2px solid rgba(255, 255, 255, 0.3);
         }
@@ -775,7 +776,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <div class="pixelate" id="mainContent">
         <div class="header">
-            <div class="header-title">Eero Dashboard v4.0.0 - The Gibson</div>
+            <div class="header-title">MiniRack Dashboard v4.0.1 - The Gibson</div>
             <div class="header-actions">
                 <div class="status-indicator">
                     <div class="status-dot"></div>
@@ -824,9 +825,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         </div>
     </div>
 
-    <div class="gibson-icon" id="gibsonIcon" title="The Gibson">
-        <i class="fas fa-pi"></i>
-    </div>
+    <div class="gibson-icon" id="gibsonIcon" title="The Gibson">π</div>
 
     <div class="modal gibson-modal" id="gibsonModal">
         <div class="modal-content">
@@ -835,7 +834,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <button class="close-btn" id="closeGibson">&times;</button>
             </div>
             <div class="version-info">
-                <div class="version-current">v4.0.0</div>
+                <div class="version-current">v4.0.1</div>
                 <div class="version-status" id="versionStatus">Checking...</div>
             </div>
             <div class="gibson-actions">
@@ -1167,7 +1166,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         });
         
         window.addEventListener('load', () => {
-            console.log('Eero Dashboard v4.0.0');
+            console.log('MiniRack Dashboard v4.0.1 - The Gibson');
             initCharts();
             updateDashboard();
             setInterval(updateDashboard, 60000);
@@ -1236,8 +1235,8 @@ def reboot_system():
 @app.route('/api/version')
 def get_version():
     return jsonify({
-        'current_version': '4.0.0',
-        'name': 'Eero Dashboard - The Gibson',
+        'current_version': '4.0.1',
+        'name': 'MiniRack Dashboard - The Gibson',
         'repository': f'https://github.com/{GITHUB_REPO}'
     })
 
@@ -1250,6 +1249,6 @@ def health_check():
     })
 
 if __name__ == '__main__':
-    logging.info("Starting Eero Dashboard v4.0.0 - The Gibson")
+    logging.info("Starting MiniRack Dashboard v4.0.1 - The Gibson")
     update_cache()
     app.run(host='0.0.0.0', port=80, debug=False)
