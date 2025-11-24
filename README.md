@@ -7,6 +7,7 @@ A comprehensive, real-time network monitoring dashboard for eero networks with a
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
 ---
+![alt text](https://github.com/adam-p/markdown-here/raw/master/src/common/images/icon48.png](https://github.com/eero-drew/minirackdash/blob/main/mrdash-01.png) "MR Dash Screenshot")
 
 ## 🌟 Features
 
